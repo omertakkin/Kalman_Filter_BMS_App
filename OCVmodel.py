@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 # Simulation variables
 dt = 1  # delta t in seconds
 sample_freq = 1 / dt
-sim_end_time = 6000  # in seconds
-curr_T = 5  # [-25 -15 -5 5 15 25 45] degrees Celsius, index for temperature
+sim_end_time = 100  # in seconds
+idx_T = 5  # [-25 -15 -5 5 15 25 45] degrees Celsius, index for temperature
 
 cell_model = pd.read_csv('model_param/cell_model.csv')
 
@@ -39,9 +39,9 @@ def get_OCVrel(z):
 
 # Inputs
 i = np.ones(int(sim_end_time / dt) + 1)  # initialize i
-i[:300] = 30
-i[300:900] = -5   # 25A for 600 seconds
-i[900:] = 0
+i[:25] = 300
+i[25:75] = -50   # 25A for 600 seconds
+i[57:] = 0
 
 # States
 z = np.ones(int(sim_end_time / dt + 1))  # initialize z
@@ -55,18 +55,18 @@ s = 0  # Initialize s
 # Simulation loop
 for time in range(int(sim_end_time)):
     # calculating next state 
-    A_RC = np.exp(-dt / RCParam[curr_T])
+    A_RC = np.exp(-dt / RCParam[idx_T])
     B_RC = 1 - A_RC
-    A_H = np.exp(-np.abs((etaParam[curr_T] * i[time] * GParam[curr_T] * dt) / (QParam[curr_T]*3600)))
-    z[time + 1] = z[time] + (-etaParam[curr_T] * dt / (QParam[curr_T]*3600)) * i[time]
+    A_H = np.exp(-np.abs((etaParam[idx_T] * i[time] * GParam[idx_T] * dt) / (QParam[idx_T]*3600)))
+    z[time + 1] = z[time] + (-etaParam[idx_T] * dt / (QParam[idx_T]*3600)) * i[time]
     i_R[time + 1] = A_RC * i_R[time] + B_RC * i[time]
     h[time + 1] = A_H * h[time] + (A_H - 1) * np.sign(i[time])
 
     # calculating current output
     if abs(i[time]) > 0:
         s = np.sign(i[time])
-    OCV = get_OCV0(z[time]) + get_OCVrel(z[time])*0.001*temps[curr_T]
-    v[time + 1] = OCV + M0Param[curr_T]*s + MParam[curr_T]*h[time] - RParam[curr_T]*i_R[time] - R0Param[curr_T]*i[time]
+    OCV = get_OCV0(z[time]) + get_OCVrel(z[time])*0.001*temps[idx_T]
+    v[time + 1] = OCV + M0Param[idx_T]*s + MParam[idx_T]*h[time] - RParam[idx_T]*i_R[time] - R0Param[idx_T]*i[time]
 
 t = np.arange(0, sim_end_time+dt ,dt)
 
