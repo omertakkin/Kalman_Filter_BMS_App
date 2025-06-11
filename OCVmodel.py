@@ -8,9 +8,26 @@ sample_freq = 1 / dt
 sim_end_time = 6000  # in seconds
 curr_T = 5  # Index corresponding -> 25 degrees Celsius
 
-OCV_vs_SOC_0deg = pd.read_csv('model_param/OCV_vs_SOC.csv')
-OCV_temp_rel = pd.read_csv('model_param/OCV_temp_var.csv')
+cell_model = pd.read_csv('model_param/cell_model.csv')
 
+# Fields pertaining to the OCV versus SOC relationship:
+OCV   = cell_model.iloc[:,0].dropna()  # OCV vector at which SOC0 and SOCrel are stored
+OCV0  = cell_model.iloc[:,1].dropna()  # Vector of OCV versus SOC at 0 degree Celsius
+OCVrel= cell_model.iloc[:,2].dropna()  # Vector of change in OCV versus SOC per degree Celsius [V/C]
+SOC   = cell_model.iloc[:,3].dropna()  # SOC vector at which OCV0 and OCVrel are stored
+SOC0  = cell_model.iloc[:,4].dropna()  # Vector OF SOC versus OCV at 0 degree Celsius
+SOCrel= cell_model.iloc[:,5].dropna()  # Vector of change in SOC versus OCV per degree Celsius [1/C]
+
+# Fields pertaining to the dynamic relationship:
+temps   = cell_model.iloc[:,6].dropna()   # Temperatures at which dynamic parameters are stored [C]
+Qparam  = cell_model.iloc[:,7].dropna()   # Capacity Q at each temperature [Ah]
+etaParam= cell_model.iloc[:,8].dropna()   # Coulombic efficiency eta at each temperature [unitless]
+Gparam  = cell_model.iloc[:,9].dropna()   # Hysteresis "gamma" parameter [unitless]
+MParam  = cell_model.iloc[:,10].dropna()  # Hysteresis M parameter [V]
+M0Param = cell_model.iloc[:,11].dropna()  # Hysteresis M0 parameter [V]
+R0Param = cell_model.iloc[:,12].dropna()  # Series resistance parameter R_0 [ohm]
+RCParam = cell_model.iloc[:,13].dropna()  # The R-C time constant parameter R_j C_j [s]
+RParam  = cell_model.iloc[:,14].dropna()  # Resistance R_j of R-C parameter [ohm]
 
 
 
@@ -20,27 +37,6 @@ def get_OCV0(z):
 def get_OCVrel(z):
   OCVrel_curr = np.interp(z, SOCrel, OCVrel)
   return OCVrel_curr
-
-
-
-# Fields pertaining to the OCV versus SOC relationship:
-OCV0 = OCV_vs_SOC_0deg.iloc[:,1]    # Vector of OCV versus SOC at 0 degree Celsius
-OCVrel = OCV_temp_rel.iloc[:,1]  # Vector of change in OCV versus SOC per degree Celsius [V/C]
-SOC = 1     # SOC vector at which OCV0 and OCVrel are stored
-SOC0 = OCV_vs_SOC_0deg.iloc[:,0]    # Vector OF SOC versus OCV at 0 degree Celsius
-SOCrel = OCV_temp_rel.iloc[:,0]  # Vector of change in SOC versus OCV per degree Celsius [1/C]
-OCV = 3.5   # OCV vector at which SOC0 and SOCrel are stored
-
-# Fields pertaining to the dynamic relationship:
-temps = np.array([-25, -15, -5, 5, 15, 25, 45])  # Temperatures at which dynamic parameters are stored [C]
-Qparam = np.array([25, 25, 25, 25, 25, 25, 25])  # Capacity Q at each temperature [Ah]
-etaParam = np.array([1, 1, 1, 1, 1, 1, 1])  # Coulombic efficiency eta at each temperature [unitless]
-Gparam = np.array([10, 90, 100, 90, 60, 170, 190])  # Hysteresis "gamma" parameter [unitless]
-MParam = np.array([90, 60, 40, 20, 25, 20, 10]) * 0.001  # Hysteresis M parameter [V]
-M0Param = np.array([5, 1, 1, 5, 4, 3, 2]) * 0.001  # Hysteresis M0 parameter [V]
-R0Param = np.array([10, 8, 5, 4, 3, 2, 1]) * 0.001  # Series resistance parameter R_0 [ohm]
-RCParam = np.array([1.5, 1.3, 1.2, 2.2, 3.4, 3.5, 3.4])  # The R-C time constant parameter R_j C_j [s]
-RParam = np.array([5, 2, 1, 1, 0.8, 0.5, 0.3]) * 0.001  # Resistance R_j of R-C parameter [ohm]
 
 # Inputs
 i = np.ones(int(sim_end_time / dt) + 1)  # initialize i
