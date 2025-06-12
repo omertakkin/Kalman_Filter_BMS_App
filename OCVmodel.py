@@ -2,12 +2,23 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Simulation variables
-dt = 1  # delta t in seconds
+# Read input file
+input_file = pd.read_csv('model_input/input_5.csv')
+t = np.array(input_file['time'].dropna())     # time array, shape (N,)
+i = np.array(input_file['current'].dropna())  # current array, shape (N,)
+init_soc = input_file['initsoc'][0]           # initial SOC, scalar value 
+
+# Set simulation length based on current array
+dt = t[1] - t[0]                 # assume uniform sampling
 sample_freq = 1 / dt
-sim_end_time = 100  # in seconds
+sim_steps = len(i)               # number of simulation steps
+
+# Truncate t to match current
+t = t[:sim_steps]
+
 idx_T = 5  # [-25 -15 -5 5 15 25 45] degrees Celsius, index for temperature
 
+# read your cell model once
 cell_model = pd.read_csv('model_param/cell_model.csv')
 
 # Fields pertaining to the OCV versus SOC relationship:
@@ -37,23 +48,18 @@ def get_OCVrel(z):
   OCVrel_curr = np.interp(z, SOCrel, OCVrel)
   return OCVrel_curr
 
-# Inputs
-i = np.ones(int(sim_end_time / dt) + 1)  # initialize i
-i[:25] = 0
-i[25:75] = 30   # 25A for 600 seconds
-i[57:] = -10
 
-# States
-z = np.ones(int(sim_end_time / dt + 1))  # initialize z
-i_R = np.zeros(int(sim_end_time / dt + 1))  # initialize i_R
-h = np.zeros(int(sim_end_time / dt + 1))  # initialize h
-# Output
-v = np.zeros(int(sim_end_time / dt + 1))  # initialize v
+# Initialize arrays to match input data length
+z = np.ones(sim_steps)  # initialize z
+z[0] = init_soc  # set initial SOC
+i_R = np.zeros(sim_steps)  # initialize i_R
+h = np.zeros(sim_steps)  # initialize h
+v = np.zeros(sim_steps)  # initialize v
 
 s = 0  # Initialize s
 
 # Simulation loop
-for time in range(int(sim_end_time)):
+for time in range(sim_steps - 1):
     # calculating next state 
     A_RC = np.exp(-dt / RCParam[idx_T])
     B_RC = 1 - A_RC
@@ -68,8 +74,11 @@ for time in range(int(sim_end_time)):
     OCV = get_OCV0(z[time]) + get_OCVrel(z[time])*0.001*temps[idx_T]
     v[time + 1] = OCV + M0Param[idx_T]*s + MParam[idx_T]*h[time] - RParam[idx_T]*i_R[time] - R0Param[idx_T]*i[time]
 
-t = np.arange(0, sim_end_time+dt ,dt)
-
+# Debug print statements
+print("Length of t:", len(t))
+print("Length of i:", len(i))
+print("Length of v:", len(v))
+print("Length of z:", len(z))
 
 data = pd.DataFrame({
     'time': t,
@@ -80,10 +89,12 @@ data = pd.DataFrame({
 data.to_csv('model_out/sim_data.csv', index=False) # This saves the simulated time, true SOC (z), voltage (v), and current (i) for use by the EKF script.
 
 
+mins = t / 60  # Convert time to minutes for plotting
+
 # Plotting
-plt.plot(t, v, label="Output Voltage")
+plt.plot(mins, v, label="Output Voltage")
 plt.title("Output Voltage (V)")
-plt.xlabel("Time (s)")
+plt.xlabel("Time (h)")
 plt.ylabel("Voltage (V)")
 plt.grid(True)
 #plt.xlim(250,2000)
@@ -92,9 +103,9 @@ plt.legend()
 plt.show()
 
 
-plt.plot(t, z, label="State of charge")
+plt.plot(mins, z, label="State of charge")
 plt.title("State of charge")
-plt.xlabel("Time (s)")
+plt.xlabel("Time (h)")
 plt.ylabel("SOC")
 plt.grid(True)
 plt.legend()
