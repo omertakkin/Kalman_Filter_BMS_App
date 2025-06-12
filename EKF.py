@@ -1,4 +1,7 @@
 import numpy as np
+from scipy.interpolate import interp1d
+from scipy.optimize import fsolve
+import matplotlib.pyplot as plt
 
 class EKF:
     def __init__(self, v0, T0, SigmaX0, SigmaV, SigmaW, model):
@@ -6,10 +9,31 @@ class EKF:
         # Store model
         self.model = model
 
+        # Extract only valid pairs for OCV0/SOC0 and OCVrel/SOCrel
+        mask0 = (~self.model['SOC0'].isna()) & (~self.model['OCV0'].isna())
+        self.SOC0 = np.array(self.model.loc[mask0, 'SOC0'])
+        self.OCV0 = np.array(self.model.loc[mask0, 'OCV0'])
+
+        maskrel = (~self.model['SOCrel'].isna()) & (~self.model['OCVrel'].isna())
+        self.SOCrel = np.array(self.model.loc[maskrel, 'SOCrel'])
+        self.OCVrel = np.array(self.model.loc[maskrel, 'OCVrel'])
+        
         # Initialize state description
         ir0 = 0.0  # Initial diffusion current
         hk0 = 0.0  # Initial hysteresis voltage
         SOC0 = self.SOCfromOCVtemp(v0, T0)
+        
+        """
+        ### Debugging
+        print(f"\nInitial voltage: {v0}, Initial SOC from OCV: {SOC0}")
+        soc_range = np.linspace(0, 1, 100)
+        ocv_curve = [self.OCVfromSOCtemp(z, T0) for z in soc_range]
+        plt.plot(soc_range, ocv_curve)
+        plt.xlabel('SOC')
+        plt.ylabel('OCV')
+        plt.title('OCV vs SOC')
+        plt.show()
+        """
 
         # State variable indices
         self.irInd = 0
@@ -17,122 +41,89 @@ class EKF:
         self.zkInd = 2
 
         # Initial state (column matrix)
-        self.xhat = np.array([[SOC0], [ir0], [hk0]])
+        self.xhat = np.array([[ir0] , [hk0] , [SOC0]])
 
-        # Covariances
-        self.SigmaW = SigmaW
-        self.SigmaV = SigmaV
-        self.SigmaX = SigmaX0
-        self.SXbump = 5
+        # Covariances - ensure they are positive definite
+        self.SigmaW = np.abs(SigmaW)  # Ensure positive
+        self.SigmaV = np.abs(SigmaV)  # Ensure positive
+        self.SigmaX = np.diag(np.diag(SigmaX0))  # Use only diagonal elements initially
+        self.SXbump = 2  # Reduced from 5 to make updates more gradual
 
         # Previous current value
         self.priorI = 0.0
         self.signIK = 0.0
+        
+        # Add minimum covariance values to prevent numerical issues
+        self.min_cov = 1e-6
 
+    def OCVfromSOCtemp(self, z, T):
+        """
+        Get temperature-compensated OCV from SOC (z) and T (°C)
+        """
+        # Interpolate OCV0 at given SOC
+        ocv0 = np.interp(z, self.SOC0, self.OCV0)
+        
+        # Interpolate OCVrel at given SOC
+        ocvrel = np.interp(z, self.SOCrel, self.OCVrel)
+        
+        # If OCV0 is at 0°C, use T directly. If at 25°C, use (T-25)
+        ocv = ocv0 + ocvrel * 0.001 * T
+        
+        return ocv
 
     def SOCfromOCVtemp(self, v, T):
         """
-        Interpolate the state of charge (SOC) from open-circuit voltage v0 and temperature T0.
-        Args:
-            v: voltage (V)
-            T: temperature (°C)
-        Returns:
-            SOC value between 0 and 1
+        Estimate SOC from OCV and temperature using interpolation
         """
-        soc = np.array(self.model['SOC0'].dropna())
-        ocv0 = np.array(self.model['OCV0'].dropna())
-        ocvrel = np.array(self.model['OCVrel'].dropna())
-
-        # Ensure all arrays are aligned in length
-        min_len = min(len(soc), len(ocv0), len(ocvrel))
-        soc, ocv0, ocvrel = soc[:min_len], ocv0[:min_len], ocvrel[:min_len]
-
-        # Calculate OCV at given temperature
-        ocv_temp = ocv0 + T * ocvrel
-
-        # Sort arrays based on OCV for proper interpolation
-        sort_idx = np.argsort(ocv_temp)
-        ocv_sorted = ocv_temp[sort_idx]
-        soc_sorted = soc[sort_idx]
-
-        # Handle out-of-range values
-        if v <= ocv_sorted[0]:
-            print(f"Warning: Voltage {v:.2f}V below minimum OCV {ocv_sorted[0]:.2f}V. Clamping SOC to {soc_sorted[0]:.2%}")
-            return float(soc_sorted[0])
-        if v >= ocv_sorted[-1]:
-            print(f"Warning: Voltage {v:.2f}V above maximum OCV {ocv_sorted[-1]:.2f}V. Clamping SOC to {soc_sorted[-1]:.2%}")
-            return float(soc_sorted[-1])
-
-        # Interpolate SOC value
-        return float(np.interp(v, ocv_sorted, soc_sorted))
-    
-    def OCVfromSOCtemp(self, z, T):
-        """
-        Compute the open-circuit voltage for a given state of charge z (0–1) and temperature T (°C).
-        Args:
-            z: SOC value between 0 and 1
-            T: temperature (°C)
-        Returns:
-            OCV value in volts
-        """
-        # Input validation
-        if not 0 <= z <= 1:
-            print(f"Warning: SOC {z:.2%} outside valid range [0,1]. Clamping to valid range.")
-            z = np.clip(z, 0, 1)
-
-        soc = np.array(self.model['SOC0'].dropna())
-        ocv0 = np.array(self.model['OCV0'].dropna())
-        ocvrel = np.array(self.model['OCVrel'].dropna())
-
-        # Ensure all arrays are aligned in length
-        min_len = min(len(soc), len(ocv0), len(ocvrel))
-        soc, ocv0, ocvrel = soc[:min_len], ocv0[:min_len], ocvrel[:min_len]
-
-        # Calculate OCV components
-        ocv_base = float(np.interp(z, soc, ocv0))
-        ocv_temp = float(np.interp(z, soc, ocvrel))
+        # Create a function to find SOC that gives the target OCV
+        def find_soc(soc_guess):
+            return self.OCVfromSOCtemp(soc_guess, T) - v
+            
+        # Try different initial guesses
+        initial_guesses = [0.2, 0.5, 0.8]
+        best_soc = None
+        min_error = float('inf')
         
-        return ocv_base + T * ocv_temp
-    
+        for guess in initial_guesses:
+            try:
+                soc = fsolve(find_soc, guess, full_output=True)
+                if soc[1]['fvec'][0] < min_error:
+                    min_error = soc[1]['fvec'][0]
+                    best_soc = soc[0][0]
+            except:
+                continue
+                
+        if best_soc is None:
+            # Fallback to linear interpolation if root finding fails
+            # Find the closest OCV values in our lookup table
+            ocv0_values = self.OCV0
+            soc0_values = self.SOC0
+            best_soc = np.interp(v, ocv0_values, soc0_values)
+        
+        # Ensure SOC is within valid range [0, 1]
+        soc = np.clip(best_soc, 0, 1)
+        
+        return soc
+
     def dOCVfromSOCtemp(self, z, T):
         """
-        Compute d(OCV)/d(SOC) at a given SOC (z) and temperature (T).
-        Uses central differences on model data.
-        Args:
-            z: SOC value between 0 and 1
-            T: temperature (°C)
-        Returns:
-            dOCV/dSOC value in V/SOC
+        Compute dOCV/dSOC at a given SOC z and temperature T
         """
-        # Input validation
-        if not 0 <= z <= 1:
-            print(f"Warning: SOC {z:.2%} outside valid range [0,1]. Clamping to valid range.")
-            z = np.clip(z, 0, 1)
-
-        soc = np.array(self.model['SOC0'].dropna())
-        ocv0 = np.array(self.model['OCV0'].dropna())
-        ocvrel = np.array(self.model['OCVrel'].dropna())
-
-        # Ensure all arrays are aligned in length
-        min_len = min(len(soc), len(ocv0), len(ocvrel))
-        soc, ocv0, ocvrel = soc[:min_len], ocv0[:min_len], ocvrel[:min_len]
-
-        # Calculate derivatives using central differences
-        dOCV0_dSOC = np.gradient(ocv0, soc)
-        dOCVrel_dSOC = np.gradient(ocvrel, soc)
-
-        # Interpolate derivatives at given SOC
-        dOCV0 = float(np.interp(z, soc, dOCV0_dSOC))
-        dOCVrel = float(np.interp(z, soc, dOCVrel_dSOC))
-
-        return dOCV0 + T * dOCVrel
+        # Small perturbation for numerical derivative
+        delta = 1e-6
         
+        # Calculate OCV at slightly higher and lower SOC
+        ocv_plus = self.OCVfromSOCtemp(z + delta, T)
+        ocv_minus = self.OCVfromSOCtemp(z - delta, T)
+        
+        # Compute numerical derivative
+        dOCV = (ocv_plus - ocv_minus) / (2 * delta)
+        
+        return dOCV
 
     
     def iterEKF(self, vk, ik, Tk, deltat):
         
-        # model = self.model
-
         # Load the cell model parameters for the present operating temp
         Q = self.model['QParam'][5]
         G = self.model['GParam'][5]
@@ -183,13 +174,12 @@ class EKF:
         xhat = Ahat @ xhat + B @ np.array([[I], [np.sign(I)]])
 
         # EKF Step 2: Error covariance prediction time update
-        # sigmaminus(k) = Ahat[k-1] * sigmaplus[k-1] * Ahat[k-1].T 
-        #                   + Bhat[k-1] * sigmawtilde * Bhat[k-1].T
-
         SigmaX = Ahat @ SigmaX @ Ahat.T + Bhat @ np.atleast_2d(SigmaW) @ Bhat.T
+        
+        # Ensure minimum covariance values
+        np.fill_diagonal(SigmaX, np.maximum(np.diag(SigmaX), self.min_cov))
 
         # EKF Step 3: Output estimate
-
         yhat = self.OCVfromSOCtemp(xhat[zkInd, 0], Tk) + M0 * signIK + M * xhat[hkInd, 0] - R * xhat[irInd, 0] - R0 * ik
 
         # EKF Step 4: Estimator gain matrix
@@ -198,41 +188,54 @@ class EKF:
         Chat[0, hkInd] = M
         Chat[0, irInd] = -R
         Dhat = np.array([[1]])
+        
+        # Ensure numerical stability in covariance calculations
         SigmaY = Chat @ SigmaX @ Chat.T + Dhat * SigmaV
-        L = SigmaX @ Chat.T @ np.linalg.inv(SigmaY)
+        SigmaY = np.maximum(SigmaY, self.min_cov)  # Ensure positive
+        
+        try:
+            L = SigmaX @ Chat.T @ np.linalg.inv(SigmaY)
+        except np.linalg.LinAlgError:
+            # If matrix inversion fails, use a more stable approach
+            L = SigmaX @ Chat.T / SigmaY
 
-        # EKF Step 5: State estimate measurment update
-        r = vk - yhat # residual. Use to check sensor errors...
-
+        # EKF Step 5: State estimate measurement update
+        r = vk - yhat  # residual
+        
+        # Adaptive measurement update
         r_scalar = float(np.atleast_1d(r).squeeze())
         SigmaY_scalar = float(np.atleast_1d(SigmaY).squeeze())
-
-
-        if r_scalar**2 > 100 * SigmaY_scalar: 
-            L = np.zeros_like(L) # If residual is too large, don't update state
+        
+        # More gradual adaptation based on residual
+        if r_scalar**2 > 4 * SigmaY_scalar:
+            L = L * 0.5  # Reduce gain instead of zeroing it
+            SigmaX[zkInd, zkInd] = SigmaX[zkInd, zkInd] * self.SXbump
+            
         xhat = xhat + L * r
-        xhat[hkInd, 0] = np.minimum(1, np.maximum(-1, xhat[hkInd, 0])) # help maintain robustness
-        xhat[zkInd, 0] = np.minimum(1.05, np.maximum(-0.05, xhat[zkInd, 0])) 
-
+        
+        # Constrain states to physical limits
+        xhat[hkInd, 0] = np.minimum(1, np.maximum(-1, xhat[hkInd, 0]))
+        xhat[zkInd, 0] = np.minimum(1.05, np.maximum(-0.05, xhat[zkInd, 0]))
 
         # EKF Step 6: Error covariance measurement update
         SigmaX = SigmaX - L @ SigmaY @ L.T
-        #SigmaX bumb code
-        if r_scalar**2 > 4 * SigmaY_scalar: # Bad voltage estimate by 2 std, bump SigmaX
-            print("Bumping SigmaX")
-            SigmaX[zkInd, zkInd] = SigmaX[zkInd, zkInd] * self.SXbump
+        
+        # Ensure positive definiteness and minimum values
+        np.fill_diagonal(SigmaX, np.maximum(np.diag(SigmaX), self.min_cov))
+        
+        # Force symmetry and positive definiteness
+        SigmaX = (SigmaX + SigmaX.T) / 2
+        eigvals = np.linalg.eigvals(SigmaX)
+        if np.any(eigvals < 0):
+            SigmaX = SigmaX + np.eye(nx) * self.min_cov
 
-        #SigmaX = (SigmaX + SigmaX.T) / 2  # Force symmetry
-        U, S, V = np.linalg.svd(SigmaX)  # SVD for numerical stability
-        HH = V @ S @ V.T
-        SigmaX = (SigmaX + SigmaX.T + HH + HH.T) / 4  # help maintain robustness
-
-        # Save data in EKF structure for next time...
+        # Save data in EKF structure for next time
         self.priorI = ik
         self.SigmaX = SigmaX
         self.xhat = xhat
-        zk = float(xhat[zkInd, 0])
-        zkbnd = float(3 * np.sqrt(SigmaX[zkInd, zkInd]))
         
-        # Return SOC estimate and bound
-        return zk , zkbnd
+        # Calculate SOC estimate and bound
+        zk = float(xhat[zkInd, 0])
+        zkbnd = float(3 * np.sqrt(max(SigmaX[zkInd, zkInd], self.min_cov)))
+        
+        return zk, zkbnd

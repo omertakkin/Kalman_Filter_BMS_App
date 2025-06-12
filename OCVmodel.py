@@ -39,9 +39,9 @@ def get_OCVrel(z):
 
 # Inputs
 i = np.ones(int(sim_end_time / dt) + 1)  # initialize i
-i[:25] = 300
-i[25:75] = -50   # 25A for 600 seconds
-i[57:] = 0
+i[:25] = 0
+i[25:75] = 30   # 25A for 600 seconds
+i[57:] = -10
 
 # States
 z = np.ones(int(sim_end_time / dt + 1))  # initialize z

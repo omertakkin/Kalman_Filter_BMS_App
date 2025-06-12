@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 cell_model = pd.read_csv('model_param/cell_model.csv')
 Cell_DYN_P5 = pd.read_csv('model_out/sim_data.csv')
-T = 25  # degrees Celsius, index for temperature
+T = 25  # degrees Celsius
 
 time = Cell_DYN_P5['time'].values[1:]       # Time       
 time = time - time[0]                       # Normalize time to start from 0
