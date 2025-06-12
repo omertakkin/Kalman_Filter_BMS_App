@@ -16,7 +16,7 @@ sim_steps = len(i)               # number of simulation steps
 # Truncate t to match current
 t = t[:sim_steps]
 
-idx_T = 5  # [-25 -15 -5 5 15 25 45] degrees Celsius, index for temperature
+idx_T = 0  # [-25 -15 -5 5 15 25 45] degrees Celsius, index for temperature
 
 # read your cell model once
 cell_model = pd.read_csv('model_param/cell_model.csv')

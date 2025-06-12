@@ -4,7 +4,7 @@ from scipy.optimize import fsolve
 import matplotlib.pyplot as plt
 
 class EKF:
-    def __init__(self, v0, T0, SigmaX0, SigmaV, SigmaW, model):
+    def __init__(self, v0, idx_T0, SigmaX0, SigmaV, SigmaW, model):
         
         # Store model
         self.model = model
@@ -17,6 +17,10 @@ class EKF:
         maskrel = (~self.model['SOCrel'].isna()) & (~self.model['OCVrel'].isna())
         self.SOCrel = np.array(self.model.loc[maskrel, 'SOCrel'])
         self.OCVrel = np.array(self.model.loc[maskrel, 'OCVrel'])
+
+        self.temps = np.array(self.model['temps'].dropna())
+        self.idx_T0 = idx_T0
+        T0 = self.temps[idx_T0]  
         
         # Initialize state description
         ir0 = 0.0  # Initial diffusion current
@@ -47,7 +51,7 @@ class EKF:
         self.SigmaW = np.abs(SigmaW)  # Ensure positive
         self.SigmaV = np.abs(SigmaV)  # Ensure positive
         self.SigmaX = np.diag(np.diag(SigmaX0))  # Use only diagonal elements initially
-        self.SXbump = 2  # Reduced from 5 to make updates more gradual
+        self.SXbump = 5
 
         # Previous current value
         self.priorI = 0.0
@@ -125,14 +129,14 @@ class EKF:
     def iterEKF(self, vk, ik, Tk, deltat):
         
         # Load the cell model parameters for the present operating temp
-        Q = self.model['QParam'][5]
-        G = self.model['GParam'][5]
-        M = self.model['MParam'][5]
-        M0 = self.model['M0Param'][5]
-        RC = self.model['RCParam'][5]
-        R = self.model['RParam'][5]
-        R0 = self.model['R0Param'][5]
-        eta = self.model['etaParam'][5]
+        Q = self.model['QParam'][self.idx_T0]
+        G = self.model['GParam'][self.idx_T0]
+        M = self.model['MParam'][self.idx_T0]
+        M0 = self.model['M0Param'][self.idx_T0]
+        RC = self.model['RCParam'][self.idx_T0]
+        R = self.model['RParam'][self.idx_T0]
+        R0 = self.model['R0Param'][self.idx_T0]
+        eta = self.model['etaParam'][self.idx_T0]
 
         if ik<0: ik=ik*eta # adjust current if charging cell
 
@@ -176,9 +180,6 @@ class EKF:
         # EKF Step 2: Error covariance prediction time update
         SigmaX = Ahat @ SigmaX @ Ahat.T + Bhat @ np.atleast_2d(SigmaW) @ Bhat.T
         
-        # Ensure minimum covariance values
-        np.fill_diagonal(SigmaX, np.maximum(np.diag(SigmaX), self.min_cov))
-
         # EKF Step 3: Output estimate
         yhat = self.OCVfromSOCtemp(xhat[zkInd, 0], Tk) + M0 * signIK + M * xhat[hkInd, 0] - R * xhat[irInd, 0] - R0 * ik
 
@@ -187,17 +188,20 @@ class EKF:
         Chat[0, zkInd] = self.dOCVfromSOCtemp(float(xhat[zkInd, 0]), Tk)
         Chat[0, hkInd] = M
         Chat[0, irInd] = -R
-        Dhat = np.array([[1]])
+        Dhat = np.array([[1.0]])
         
         # Ensure numerical stability in covariance calculations
         SigmaY = Chat @ SigmaX @ Chat.T + Dhat * SigmaV
-        SigmaY = np.maximum(SigmaY, self.min_cov)  # Ensure positive
         
+        L = SigmaX @ Chat.T @ np.linalg.inv(SigmaY)
+
+        """
         try:
             L = SigmaX @ Chat.T @ np.linalg.inv(SigmaY)
         except np.linalg.LinAlgError:
             # If matrix inversion fails, use a more stable approach
             L = SigmaX @ Chat.T / SigmaY
+        """
 
         # EKF Step 5: State estimate measurement update
         r = vk - yhat  # residual
@@ -205,36 +209,39 @@ class EKF:
         # Adaptive measurement update
         r_scalar = float(np.atleast_1d(r).squeeze())
         SigmaY_scalar = float(np.atleast_1d(SigmaY).squeeze())
+
+        if r_scalar**2 > 100 * SigmaY_scalar:
+            L = np.zeros_like(L)  # Zero gain if residual is too large
         
-        # More gradual adaptation based on residual
-        if r_scalar**2 > 4 * SigmaY_scalar:
-            L = L * 0.5  # Reduce gain instead of zeroing it
-            SigmaX[zkInd, zkInd] = SigmaX[zkInd, zkInd] * self.SXbump
-            
         xhat = xhat + L * r
-        
-        # Constrain states to physical limits
         xhat[hkInd, 0] = np.minimum(1, np.maximum(-1, xhat[hkInd, 0]))
         xhat[zkInd, 0] = np.minimum(1.05, np.maximum(-0.05, xhat[zkInd, 0]))
-
+        
         # EKF Step 6: Error covariance measurement update
         SigmaX = SigmaX - L @ SigmaY @ L.T
-        
-        # Ensure positive definiteness and minimum values
-        np.fill_diagonal(SigmaX, np.maximum(np.diag(SigmaX), self.min_cov))
+
+        # More gradual adaptation based on residual
+        if r_scalar**2 > 4 * SigmaY_scalar:
+            print("Bumping SigmaX")
+            SigmaX[zkInd, zkInd] = SigmaX[zkInd, zkInd] * self.SXbump
         
         # Force symmetry and positive definiteness
         SigmaX = (SigmaX + SigmaX.T) / 2
         eigvals = np.linalg.eigvals(SigmaX)
         if np.any(eigvals < 0):
             SigmaX = SigmaX + np.eye(nx) * self.min_cov
+        
+        """
+        U, S, V = np.linalg.svd(SigmaX)
+        HH = V @ S @ V.T
+        SigmaX = (SigmaX + SigmaX.T + HH + HH.T) / 4
+        np.fill_diagonal(SigmaX, np.maximum(np.diag(SigmaX), self.min_cov))
+        """
 
         # Save data in EKF structure for next time
         self.priorI = ik
         self.SigmaX = SigmaX
         self.xhat = xhat
-        
-        # Calculate SOC estimate and bound
         zk = float(xhat[zkInd, 0])
         zkbnd = float(3 * np.sqrt(max(SigmaX[zkInd, zkInd], self.min_cov)))
         

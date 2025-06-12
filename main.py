@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 
 cell_model = pd.read_csv('model_param/cell_model.csv')
 Cell_DYN_P5 = pd.read_csv('model_out/sim_data.csv')
-T = 25  # degrees Celsius
+idx_T = 0  # [-25 -15 -5 5 15 25 45]
+T = -25  # degrees Celsius
 
 time = Cell_DYN_P5['time'].values[1:]       # Time       
 time = time - time[0]                       # Normalize time to start from 0
@@ -25,7 +26,7 @@ SigmaW = 2e-1   # uncertainty in current sensor, state equation
 SigmaV = 2e-1   # uncertainty in voltage sensor, output equation
 
 # Create ekfData structure and initialize variables using first voltage measurement and first temperature measurement
-EKF_model = EKF( voltage[0] , T , SigmaX0, SigmaV, SigmaW , cell_model )
+EKF_model = EKF( voltage[0] , idx_T , SigmaX0, SigmaV, SigmaW , cell_model )
 
 # Now enter a loop for remainder of time, where we update the EKF once per sample interval
 
