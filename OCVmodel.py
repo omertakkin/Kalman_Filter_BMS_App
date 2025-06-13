@@ -75,10 +75,7 @@ for time in range(sim_steps - 1):
     v[time + 1] = OCV + M0Param[idx_T]*s + MParam[idx_T]*h[time] - RParam[idx_T]*i_R[time] - R0Param[idx_T]*i[time]
 
 # Debug print statements
-print("Length of t:", len(t))
-print("Length of i:", len(i))
-print("Length of v:", len(v))
-print("Length of z:", len(z))
+print(f"Last SOC (z): {z[-1]:.2f}")
 
 data = pd.DataFrame({
     'time': t,
@@ -88,24 +85,30 @@ data = pd.DataFrame({
 })
 data.to_csv('model_out/sim_data.csv', index=False) # This saves the simulated time, true SOC (z), voltage (v), and current (i) for use by the EKF script.
 
-
 mins = t / 60  # Convert time to minutes for plotting
-
 # Plotting
-plt.plot(mins, v, label="Output Voltage")
-plt.title("Output Voltage (V)")
-plt.xlabel("Time (h)")
-plt.ylabel("Voltage (V)")
-plt.grid(True)
-#plt.xlim(250,2000)
-#plt.ylim(3.2,3.6)
-plt.legend()
+fig, ax1 = plt.subplots()
+
+# Plot voltage on left y-axis
+ax1.plot(mins, v, label="Output Voltage", color=[0.1529, 0.6824, 1])
+ax1.set_xlabel("Time (min)")
+ax1.set_ylabel("Voltage (V)", color=[0.1529, 0.6824, 1])
+ax1.tick_params(axis='y', labelcolor=[0.1529, 0.6824, 1])
+ax1.grid(True)
+# Create a second y-axis that shares the same x-axis
+ax2 = ax1.twinx()
+ax2.plot(mins, i, label="Current", color=[1, 0.3333, 0.2706])
+ax2.set_ylabel("Current (A)", color=[1, 0.3333, 0.2706])
+ax2.tick_params(axis='y', labelcolor=[1, 0.3333, 0.2706])
+# Title and show
+plt.title("Output Voltage and Current vs Time")
+fig.tight_layout()
 plt.show()
 
 
 plt.plot(mins, z, label="State of charge")
 plt.title("State of charge")
-plt.xlabel("Time (h)")
+plt.xlabel("Time (min)")
 plt.ylabel("SOC")
 plt.grid(True)
 plt.legend()
